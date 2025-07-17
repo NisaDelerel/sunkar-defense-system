@@ -121,4 +121,4 @@ class SunkarGUI(ctk.CTk):
 
     def on_close(self):
         self.camera_manager.stop()
-        self.destroy()
+        self.destroy() 
