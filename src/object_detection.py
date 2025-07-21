@@ -4,7 +4,11 @@ from ultralytics import YOLO
 import numpy as np
 import cv2
 import joblib
-from tracker.byte_tracker import BYTETracker
+try:
+    from tracker.byte_tracker import BYTETracker
+except ImportError:
+    from tracker.simple_byte_tracker import SimpleBYTETracker as BYTETracker
+from tracker_config import BalloonTrackingConfig
 
 # 🔔 Dinamik dosya yolları: Bu dosyanın (object_detection.py) olduğu dizine göre path belirle
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -18,11 +22,17 @@ model = YOLO(MODEL_PATH)
 svm_model = joblib.load(SVM_PATH)
 label_encoder = joblib.load(ENCODER_PATH)
 
-tracker = BYTETracker(iou_thresh=0.5, max_missed=30)
+# Load configuration and create tracker with optimized parameters for balloon tracking
+config = BalloonTrackingConfig()
+tracker = BYTETracker(
+    iou_thresh=config.IOU_THRESH,
+    max_missed=config.MAX_MISSED,
+    conf_thresh=config.TRACKER_CONF_THRESH
+)
 
 def detect_objects(frame):
-    # YOLO tahmini
-    results = model.predict(source=frame, conf=0.7, verbose=False)
+    # YOLO tahmini with confidence threshold from config
+    results = model.predict(source=frame, conf=config.YOLO_CONF_THRESH, verbose=False)
     detections = []
 
     for r in results:
@@ -31,9 +41,12 @@ def detect_objects(frame):
             conf = float(box.conf[0])
             x1, y1, x2, y2 = map(int, box.xyxy[0])
             w, h = x2 - x1, y2 - y1
-            detections.append([x1, y1, w, h, conf, cls_id])
+            
+            # Filter out very small detections which are likely noise
+            if w > config.MIN_DETECTION_SIZE and h > config.MIN_DETECTION_SIZE:
+                detections.append([x1, y1, w, h, conf, cls_id])
 
-    # BYTETracker ile update
+    # BYTETracker ile update - now passing frame for appearance features
     tracks = tracker.update(np.array(detections), frame)
 
     for track in tracks:
@@ -41,12 +54,22 @@ def detect_objects(frame):
         track_id = track.track_id
 
         x1, y1, x2, y2 = int(x), int(y), int(x + w), int(y + h)
+        
+        # Ensure coordinates are within frame bounds
+        x1 = max(0, x1)
+        y1 = max(0, y1)
+        x2 = min(frame.shape[1], x2)
+        y2 = min(frame.shape[0], y2)
+        
+        if x2 <= x1 or y2 <= y1:
+            continue
+            
         roi = frame[y1:y2, x1:x2]
 
         if roi.shape[0] == 0 or roi.shape[1] == 0:
             continue
 
-        # ROI’den renk feature çıkar
+        # ROI'den renk feature çıkar
         roi_rgb = cv2.cvtColor(roi, cv2.COLOR_BGR2RGB)
         avg_r = np.mean(roi_rgb[:, :, 0])
         avg_g = np.mean(roi_rgb[:, :, 1])
@@ -67,10 +90,25 @@ def detect_objects(frame):
         pred_class = svm_model.predict(feature_vector)
         pred_label = label_encoder.inverse_transform(pred_class)[0].strip()
 
-        # Çizim
-        cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-        text = f"ID:{track_id} - {pred_label}"
-        cv2.putText(frame, text, (x1, max(0, y1 - 10)),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
+        # Improved visualization with track confidence using config colors
+        if track.confidence > config.HIGH_CONF_THRESH:
+            color = config.COLOR_HIGH_CONF
+        elif track.confidence > config.MED_CONF_THRESH:
+            color = config.COLOR_MED_CONF
+        else:
+            color = config.COLOR_LOW_CONF
+            
+        cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+        
+        # Enhanced text display with confidence
+        text = f"ID:{track_id} - {pred_label} ({track.confidence:.2f})"
+        
+        # Add text background for better visibility
+        text_size = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)[0]
+        cv2.rectangle(frame, (x1, max(0, y1 - text_size[1] - 10)), 
+                     (x1 + text_size[0], y1), color, -1)
+        
+        cv2.putText(frame, text, (x1, max(text_size[1], y1 - 5)),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 2)
 
     return frame, tracks
