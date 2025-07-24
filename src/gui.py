@@ -24,6 +24,11 @@ class SunkarGUI(ctk.CTk):
         self.selected_track_id = None
         self.last_joystick_button_state = False
         self.bind("<Button-1>", self.on_video_click)  # Mouse click event
+        self.auto_fired_ids = set()  # Track which balloons have been fired at in auto mode
+        self.auto_mode_active = False
+        self.crosshair_timer = 0  # Number of frames to keep crosshair visible
+        self.crosshair_bbox = None  # The bbox to keep crosshair on
+        self.crosshair_track_id = None  # Track ID to keep crosshair on in auto mode
 
         ctk.set_appearance_mode("dark")
         ctk.set_default_color_theme("dark-blue")
@@ -125,26 +130,75 @@ class SunkarGUI(ctk.CTk):
     def update_loop(self):
         frame, tracks = self.camera_manager.get_frame()
         if frame is not None:
-            # Draw bounding boxes and crosshair
+            auto_mode = self.mode_switch.get() == 1
             selected_bbox = None
+
+            # --- Always draw bounding boxes for all detections ---
             for det in tracks:
                 x1, y1, x2, y2 = det['bbox']
                 track_id = det['track_id']
                 color = (0, 255, 0)
+                # Highlight the selected target in red
                 if track_id == self.selected_track_id:
-                    color = (0, 0, 255)  # Red for selected
+                    color = (0, 0, 255)
                     selected_bbox = (x1, y1, x2, y2)
-                    # Draw crosshair
-                    self.draw_crosshair(frame, ((x1 + x2) // 2, (y1 + y2) // 2))
                 cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
                 cv2.putText(frame, f"ID:{track_id} {det['label']}", (x1, max(0, y1 - 10)),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
-            # Joystick button for cycling selection
-            button_index = 2  # Example: X button index
-            button_pressed = self.joystick.get_button_pressed(button_index)
-            if button_pressed and not self.last_joystick_button_state:
-                self.cycle_selected_balloon(tracks)
-            self.last_joystick_button_state = button_pressed
+
+            # --- Autonomous targeting logic with debug prints ---
+            if auto_mode:
+                red_balloons = [det for det in tracks if det['label'].lower() == "red"]
+                print(f"[AUTO] Detected red balloons: {[{'id': b['track_id'], 'bbox': b['bbox']} for b in red_balloons]}")
+                if red_balloons:
+                    candidates = [b for b in red_balloons if b['track_id'] not in self.auto_fired_ids]
+                    if candidates:
+                        target = min(candidates, key=lambda d: d['track_id'])
+                        self.selected_track_id = target['track_id']
+                        selected_bbox = target['bbox']
+                        print(f"[AUTO] Targeting balloon: track_id={target['track_id']}, bbox={target['bbox']}")
+                        # Fire laser only once per target
+                        if target['track_id'] not in self.auto_fired_ids:
+                            self.auto_fired_ids.add(target['track_id'])
+                            threading.Thread(target=self.auto_fire_laser, args=(0.5,), daemon=True).start()
+                            # Keep crosshair on this track_id
+                            self.crosshair_track_id = target['track_id']
+                        self.status_box.configure(text=f"Otonom: Hedeflenen balon ID {target['track_id']}")
+                    else:
+                        print("[AUTO] All red balloons have been targeted already.")
+                        self.status_box.configure(text="Otonom: Kırmızı balon kalmadı.")
+                        self.selected_track_id = None
+                else:
+                    print("[AUTO] No red balloons detected in this frame.")
+                    self.status_box.configure(text="Otonom: Kırmızı balon yok.")
+                    self.selected_track_id = None
+            else:
+                # Joystick button for cycling selection
+                button_index = 2  # Example: X button index
+                button_pressed = self.joystick.get_button_pressed(button_index)
+                if button_pressed and not self.last_joystick_button_state:
+                    self.cycle_selected_balloon(tracks)
+                self.last_joystick_button_state = button_pressed
+
+            # --- Draw crosshair for selected target (auto or manual) ---
+            crosshair_drawn = False
+            if selected_bbox is not None:
+                self.draw_crosshair(frame, ((selected_bbox[0] + selected_bbox[2]) // 2, (selected_bbox[1] + selected_bbox[3]) // 2))
+                crosshair_drawn = True
+            # In auto mode, keep crosshair on last targeted object as long as it is present
+            if auto_mode and not crosshair_drawn and self.crosshair_track_id is not None:
+                # Find the bbox for the last targeted track_id
+                for det in tracks:
+                    if det['track_id'] == self.crosshair_track_id:
+                        bbox = det['bbox']
+                        cx = (bbox[0] + bbox[2]) // 2
+                        cy = (bbox[1] + bbox[3]) // 2
+                        self.draw_crosshair(frame, (cx, cy))
+                        crosshair_drawn = True
+                        break
+                # If the object is no longer present, remove the crosshair
+                if not crosshair_drawn:
+                    self.crosshair_track_id = None
 
             img = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             pil_image = Image.fromarray(img)
@@ -152,6 +206,11 @@ class SunkarGUI(ctk.CTk):
             self.video_label.configure(image=imgtk)
             self.video_label.imgtk = imgtk
         self.after(30, self.update_loop)
+
+    def auto_fire_laser(self, duration=0.5):
+        self.laser_control.turn_on()
+        time.sleep(duration)
+        self.laser_control.turn_off()
 
     def start_joystick_loop(self):
         def joystick_loop():
@@ -165,14 +224,17 @@ class SunkarGUI(ctk.CTk):
         if mode == 0:
             self.status_box.configure(text="Manuel Mod Başlatıldı.")
             print("Manuel mod başlatılıyor...")
-
-        # ManualModeControl başlat
+            self.auto_fired_ids.clear()
+            self.auto_mode_active = False
+            # ManualModeControl başlat
             self.manual_control = ManualModeControl(self.camera_manager, self.laser_control, self.joystick)
             self.manual_control.switch_to_manual()
             self.start_joystick_loop()
         else:
             self.status_box.configure(text="Otonom Mod Başlatıldı.")
             print("Otonom mod başlatılıyor...")
+            self.auto_fired_ids.clear()
+            self.auto_mode_active = True
 
     def reset_position(self):
         self.camera_manager.reset_position()
