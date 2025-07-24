@@ -49,6 +49,15 @@ class JoystickController:
         else:
             return (0, 0)
 
+    def get_button_pressed(self, button_index):
+        """
+        Returns True if the specified joystick button is pressed.
+        """
+        if self.joystick:
+            pygame.event.pump()
+            return self.joystick.get_button(button_index)
+        return False
+
     def run(self):
         """Joystick kontrolünü başlat."""
         if not self.joystick and self.mode == "manual":

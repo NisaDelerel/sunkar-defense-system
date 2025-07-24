@@ -48,7 +48,7 @@ def detect_objects(frame):
 
     # BYTETrack update expects (detections, img_info, img_size)
     online_targets = tracker.update(dets_np, frame.shape[:2], frame.shape[:2])
-
+    detection_dicts = []
     for t in online_targets:
         tlwh = t.tlwh  # top-left x, y, width, height
         track_id = t.track_id
@@ -84,10 +84,11 @@ def detect_objects(frame):
         pred_class = svm_model.predict(feature_vector)
         pred_label = label_encoder.inverse_transform(pred_class)[0].strip()
 
-        # Çizim
-        cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-        text = f"ID:{track_id} - {pred_label}"
-        cv2.putText(frame, text, (x1, max(0, y1 - 10)),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
+        detection_dicts.append({
+            'track_id': track_id,
+            'bbox': (x1, y1, x2, y2),
+            'label': pred_label,
+            'confidence': t.score if hasattr(t, 'score') else None
+        })
 
-    return frame, online_targets
+    return frame, detection_dicts

@@ -21,6 +21,9 @@ class SunkarGUI(ctk.CTk):
         self.serial_comm = SerialComm(port="COM3")  # Arduino’nun bağlı olduğu doğru portu yaz
         self.laser_control = LaserControl(self.serial_comm)
         self.joystick = JoystickController(port="COM3", mode="manual")
+        self.selected_track_id = None
+        self.last_joystick_button_state = False
+        self.bind("<Button-1>", self.on_video_click)  # Mouse click event
 
         ctk.set_appearance_mode("dark")
         ctk.set_default_color_theme("dark-blue")
@@ -121,8 +124,28 @@ class SunkarGUI(ctk.CTk):
 
     def update_loop(self):
         frame, tracks = self.camera_manager.get_frame()
-
         if frame is not None:
+            # Draw bounding boxes and crosshair
+            selected_bbox = None
+            for det in tracks:
+                x1, y1, x2, y2 = det['bbox']
+                track_id = det['track_id']
+                color = (0, 255, 0)
+                if track_id == self.selected_track_id:
+                    color = (0, 0, 255)  # Red for selected
+                    selected_bbox = (x1, y1, x2, y2)
+                    # Draw crosshair
+                    self.draw_crosshair(frame, ((x1 + x2) // 2, (y1 + y2) // 2))
+                cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+                cv2.putText(frame, f"ID:{track_id} {det['label']}", (x1, max(0, y1 - 10)),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
+            # Joystick button for cycling selection
+            button_index = 2  # Example: X button index
+            button_pressed = self.joystick.get_button_pressed(button_index)
+            if button_pressed and not self.last_joystick_button_state:
+                self.cycle_selected_balloon(tracks)
+            self.last_joystick_button_state = button_pressed
+
             img = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             pil_image = Image.fromarray(img)
             imgtk = CTkImage(light_image=pil_image, size=(700, 400))
@@ -156,16 +179,44 @@ class SunkarGUI(ctk.CTk):
         self.status_box.configure(text="Başlangıç konumuna getirildi.")
         print("Reset butonu çalıştı.")
 
-    def fire_action(self):
-        if self.manual_control is not None and self.manual_control.target_centered:
-        # Hedef ortalanmışsa lazeri ateşle
-            self.manual_control.fire_laser()  # ManualModeControl sınıfındaki fire_laser metodu çağrılır
-            self.status_box.configure(text="ATEŞ EDİLDİ!")
-            print("Ateş Et butonu çalıştı, lazer açıldı.")
+    def draw_crosshair(self, frame, center, color=(0,0,255), size=10, thickness=2):
+        x, y = center
+        cv2.line(frame, (x - size, y), (x + size, y), color, thickness)
+        cv2.line(frame, (x, y - size), (x, y + size), color, thickness)
+        cv2.circle(frame, (x, y), 3, color, -1)
+
+    def on_video_click(self, event):
+        # Convert event.x, event.y to image coordinates if needed
+        frame, tracks = self.camera_manager.get_frame()
+        for det in tracks:
+            x1, y1, x2, y2 = det['bbox']
+            if x1 <= event.x <= x2 and y1 <= event.y <= y2:
+                self.selected_track_id = det['track_id']
+                break
+
+    def cycle_selected_balloon(self, tracks):
+        track_ids = [det['track_id'] for det in tracks]
+        if not track_ids:
+            self.selected_track_id = None
+            return
+        if self.selected_track_id not in track_ids:
+            self.selected_track_id = track_ids[0]
         else:
-            # Hedef ortalanmamışsa kullanıcıyı bilgilendir
+            idx = track_ids.index(self.selected_track_id)
+            self.selected_track_id = track_ids[(idx + 1) % len(track_ids)]
+
+    def fire_action(self):
+        frame, tracks = self.camera_manager.get_frame()
+        selected_bbox = None
+        for det in tracks:
+            if det['track_id'] == self.selected_track_id:
+                selected_bbox = det['bbox']
+                break
+        if selected_bbox and self.manual_control.is_balloon_centered(selected_bbox, frame.shape):
+            self.manual_control.fire_laser()
+            self.status_box.configure(text="ATEŞ EDİLDİ!")
+        else:
             self.status_box.configure(text="Ateş edilemez, hedef ortalanmadı.")
-            print("Hedef ortalanmadı, ateş edilemez.")
 
     def restricted_area(self):
         self.status_box.configure(text="Yasak Alan Kontrolleri aktif.")

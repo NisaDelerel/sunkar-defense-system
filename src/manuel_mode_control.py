@@ -33,3 +33,18 @@ class ManualModeControl:
             return "Ateş Başarılı!"
         else:
             return "Hedef Ortalanmadı, Ateş Edilemez!"
+
+    def is_balloon_centered(self, selected_bbox, frame_shape, threshold=20):
+        """
+        Checks if the center of the selected balloon's bbox is close to the center of the frame.
+        selected_bbox: (x1, y1, x2, y2)
+        frame_shape: (height, width, channels)
+        """
+        if selected_bbox is None:
+            return False
+        x1, y1, x2, y2 = selected_bbox
+        balloon_center = ((x1 + x2) // 2, (y1 + y2) // 2)
+        frame_center = (frame_shape[1] // 2, frame_shape[0] // 2)
+        dx = abs(balloon_center[0] - frame_center[0])
+        dy = abs(balloon_center[1] - frame_center[1])
+        return dx < threshold and dy < threshold
