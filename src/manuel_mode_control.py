@@ -48,3 +48,15 @@ class ManualModeControl:
         dx = abs(balloon_center[0] - frame_center[0])
         dy = abs(balloon_center[1] - frame_center[1])
         return dx < threshold and dy < threshold
+
+    def move_camera(self, x, y):
+        # Map joystick X (-1 to 1) to stepper angle (0° to 270°)
+        stepper_angle = int((x + 1) * 135)  # (x + 1) in [0,2] → [0,270]
+        # Map joystick Y (-1 to 1) to servo angle (0° to 60°)
+        servo_angle = int((y + 1) * 30)     # (y + 1) in [0,2] → [0,60]
+
+        # Send commands to hardware (update command codes as needed)
+        self.serial.send_command(0x02, stepper_angle)  # Stepper (horizontal)
+        self.serial.send_command(0x01, servo_angle)    # Servo (vertical)
+
+        print(f"[CameraManager] Stepper: {stepper_angle}°, Servo: {servo_angle}°")

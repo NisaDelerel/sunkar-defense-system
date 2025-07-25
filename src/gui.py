@@ -180,6 +180,13 @@ class SunkarGUI(ctk.CTk):
                     self.cycle_selected_balloon(tracks)
                 self.last_joystick_button_state = button_pressed
 
+                # Check B button (index 1) for firing
+                b_button_index = 1
+                b_button_pressed = self.joystick.get_button_pressed(b_button_index)
+                if b_button_pressed and not getattr(self, 'last_b_button_state', False):
+                    self.fire_action()
+                self.last_b_button_state = b_button_pressed
+
             # --- Draw crosshair for selected target (auto or manual) ---
             crosshair_drawn = False
             if selected_bbox is not None:
@@ -248,11 +255,19 @@ class SunkarGUI(ctk.CTk):
         cv2.circle(frame, (x, y), 3, color, -1)
 
     def on_video_click(self, event):
-        # Convert event.x, event.y to image coordinates if needed
         frame, tracks = self.camera_manager.get_frame()
+        if frame is None:
+            return
+
+        display_w, display_h = self.video_label.winfo_width(), self.video_label.winfo_height()
+        frame_h, frame_w = frame.shape[:2]
+
+        x_img = int(event.x * frame_w / display_w)
+        y_img = int(event.y * frame_h / display_h)
+
         for det in tracks:
             x1, y1, x2, y2 = det['bbox']
-            if x1 <= event.x <= x2 and y1 <= event.y <= y2:
+            if x1 <= x_img <= x2 and y1 <= y_img <= y2:
                 self.selected_track_id = det['track_id']
                 break
 
