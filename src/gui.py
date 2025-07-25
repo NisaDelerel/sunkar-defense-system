@@ -4,6 +4,7 @@ from PIL import Image
 import cv2
 import threading
 import time
+import math
 
 from manuel_mode_control import ManualModeControl
 from laser_control import LaserControl
@@ -29,6 +30,7 @@ class SunkarGUI(ctk.CTk):
         self.crosshair_timer = 0  # Number of frames to keep crosshair visible
         self.crosshair_bbox = None  # The bbox to keep crosshair on
         self.crosshair_track_id = None  # Track ID to keep crosshair on in auto mode
+        self.restricted_container = None  # Will be created on demand
 
         ctk.set_appearance_mode("dark")
         ctk.set_default_color_theme("dark-blue")
@@ -295,9 +297,116 @@ class SunkarGUI(ctk.CTk):
         else:
             self.status_box.configure(text="Ateş edilemez, hedef ortalanmadı.")
 
+    def show_main_page(self):
+        self.main_container.place(relx=0.5, rely=0.5, anchor="center")
+        if self.restricted_container:
+            self.restricted_container.place_forget()
+
+    def show_restricted_page(self):
+        self.main_container.place_forget()
+        if not self.restricted_container:
+            self.create_restricted_container()
+        self.restricted_container.place(relx=0.5, rely=0.5, anchor="center")
+
     def restricted_area(self):
         self.status_box.configure(text="Yasak Alan Kontrolleri aktif.")
         print("Yasak Alan Kontrolleri butonu çalıştı.")
+        self.show_restricted_page()
+
+    def create_restricted_container(self):
+        self.restricted_container = ctk.CTkFrame(self, width=1140, height=600, fg_color="#131820", corner_radius=24)
+        self.restricted_container.place(relx=0.5, rely=0.5, anchor="center")
+
+        # Title
+        title = ctk.CTkLabel(self.restricted_container, text="Yasak Alan Kontrolü", font=("Inter", 36, "bold"), text_color="#FFFFFF")
+        title.place(relx=0.5, rely=0.08, anchor="n")
+
+        # Main content frame for both zones (side by side, like main page)
+        content_frame = ctk.CTkFrame(self.restricted_container, width=1040, height=480, fg_color="#232C39", corner_radius=18)
+        content_frame.place(relx=0.5, rely=0.18, anchor="n")
+        content_frame.grid_columnconfigure((0, 1), weight=1, uniform="zone")
+        content_frame.grid_rowconfigure(0, weight=1)
+
+        # --- No-Fire Zone (left) ---
+        fire_zone_frame = ctk.CTkFrame(content_frame, width=500, height=440, fg_color="#232C39", corner_radius=18)
+        fire_zone_frame.grid(row=0, column=0, padx=(30, 15), pady=20, sticky="nsew")
+        fire_zone_frame.grid_columnconfigure(0, weight=1)
+
+        fire_zone_label = ctk.CTkLabel(fire_zone_frame, text="Atışa Yasak Alan", font=("Inter", 26, "bold"), text_color="#FFFFFF")
+        fire_zone_label.grid(row=0, column=0, pady=(10, 10), sticky="n")
+
+        # Add hareket_resmi.jpg image (same as No-Movement Zone)
+        self.fire_hareket_img_orig = Image.open("hareket_resmi.jpg").resize((420, 240))
+        self.fire_hareket_img = self.fire_hareket_img_orig.copy()
+        self.fire_hareket_imgtk = CTkImage(light_image=self.fire_hareket_img, size=(420, 240))
+        self.fire_hareket_label = ctk.CTkLabel(fire_zone_frame, image=self.fire_hareket_imgtk, text="", width=420, height=240)
+        self.fire_hareket_label.grid(row=1, column=0, pady=(0, 20), sticky="n")
+
+        # Angle input fields and button (copied from No-Movement Zone)
+        self.fire_start_entry = ctk.CTkEntry(fire_zone_frame, placeholder_text="Başlangıç Açısı", width=200)
+        self.fire_start_entry.grid(row=2, column=0, pady=(0, 10), sticky="n")
+        self.fire_end_entry = ctk.CTkEntry(fire_zone_frame, placeholder_text="Bitiş Açısı", width=200)
+        self.fire_end_entry.grid(row=3, column=0, pady=(0, 10), sticky="n")
+        fire_save_btn = ctk.CTkButton(fire_zone_frame, text="Kaydet", width=120, command=self.save_fire_zone)
+        fire_save_btn.grid(row=4, column=0, pady=(0, 10), sticky="n")
+
+        # --- No-Movement Zone (right) ---
+        move_zone_frame = ctk.CTkFrame(content_frame, width=500, height=440, fg_color="#232C39", corner_radius=18)
+        move_zone_frame.grid(row=0, column=1, padx=(15, 30), pady=20, sticky="nsew")
+        move_zone_frame.grid_columnconfigure(0, weight=1)
+
+        move_zone_label = ctk.CTkLabel(move_zone_frame, text="Harekete Yasak Alan", font=("Inter", 26, "bold"), text_color="#FFFFFF")
+        move_zone_label.grid(row=0, column=0, pady=(10, 10), sticky="n")
+
+        # Smaller image size (e.g., 420x240)
+        hareket_img = Image.open("hareket_resmi.jpg").resize((420, 240))
+        hareket_imgtk = CTkImage(light_image=hareket_img, size=(420, 240))
+        hareket_label = ctk.CTkLabel(move_zone_frame, image=hareket_imgtk, text="", width=420, height=240)
+        hareket_label.grid(row=1, column=0, pady=(0, 20), sticky="n")
+
+        move_start_entry = ctk.CTkEntry(move_zone_frame, placeholder_text="Başlangıç Açısı", width=200)
+        move_start_entry.grid(row=2, column=0, pady=(0, 10), sticky="n")
+        move_end_entry = ctk.CTkEntry(move_zone_frame, placeholder_text="Bitiş Açısı", width=200)
+        move_end_entry.grid(row=3, column=0, pady=(0, 10), sticky="n")
+        move_save_btn = ctk.CTkButton(move_zone_frame, text="Kaydet", width=120)
+        move_save_btn.grid(row=4, column=0, pady=(0, 10), sticky="n")
+
+        # Return button
+        return_btn = ctk.CTkButton(self.restricted_container, text="Geri Dön", width=200, height=45, font=("Inter", 22), command=self.show_main_page)
+        return_btn.place(relx=0.5, rely=0.93, anchor="center")
+
+        self.update_restricted_video()
+
+    def update_restricted_video(self):
+        if self.restricted_container and self.restricted_container.winfo_ismapped():
+            frame, _ = self.camera_manager.get_frame()
+            if frame is not None:
+                img = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                pil_image = Image.fromarray(img)
+                imgtk = CTkImage(light_image=pil_image, size=(700, 400))
+                self.restricted_video_label.configure(image=imgtk)
+                self.restricted_video_label.imgtk = imgtk
+            self.after(30, self.update_restricted_video)
+
+    def save_fire_zone(self):
+        try:
+            start_angle = float(self.fire_start_entry.get())
+            end_angle = float(self.fire_end_entry.get())
+        except ValueError:
+            return  # Invalid input, do nothing
+        # Draw sector (pie slice) with 0° at x-axis (right, 3 o'clock), counterclockwise
+        img = self.fire_hareket_img_orig.copy()
+        from PIL import ImageDraw
+        draw = ImageDraw.Draw(img, 'RGBA')
+        cx, cy = img.width // 2, img.height // 2
+        r = min(cx, cy) - 10
+        # PIL pieslice: 0° is at 3 o'clock, counterclockwise, which matches the coordinate system
+        # So, use angles directly
+        draw.pieslice([cx - r, cy - r, cx + r, cy + r], start_angle, end_angle, fill=(255, 0, 0, 120))
+        self.fire_hareket_img = img
+        self.fire_hareket_imgtk = CTkImage(light_image=img, size=(420, 240))
+        self.fire_hareket_label.configure(image=self.fire_hareket_imgtk)
+        self.fire_hareket_label.imgtk = self.fire_hareket_imgtk
 
     def engage_action(self):
         self.status_box.configure(text="Angajman kabul edildi.")
